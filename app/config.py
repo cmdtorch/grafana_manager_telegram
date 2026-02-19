@@ -6,6 +6,7 @@ class Settings(BaseSettings):
 
     TELEGRAM_BOT_TOKEN: str
     TELEGRAM_ADMIN_CHAT_ID: int
+    TELEGRAM_CREATOR_IDS: list[int]
 
     GRAFANA_URL: str = "http://localhost:3000"
     GRAFANA_USER: str = "admin"
