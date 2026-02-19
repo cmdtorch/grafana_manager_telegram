@@ -287,6 +287,25 @@ class GrafanaService:
         }
         try:
             async with self._client(org_id) as client:
+                # Initialize the Grafana-managed Alertmanager for this org.
+                # New orgs don't have it running until ngalert admin_config is set.
+                ng_resp = await client.post(
+                    "/api/v1/ngalert/admin_config",
+                    json={"alertmanagersChoice": "grafana"},
+                )
+                logger.debug(
+                    "POST /api/v1/ngalert/admin_config -> status=%s body=%s",
+                    ng_resp.status_code, ng_resp.text,
+                )
+                if ng_resp.status_code not in (200, 201, 202):
+                    logger.error(
+                        "Failed to init ngalert admin_config: status=%s body=%s",
+                        ng_resp.status_code, ng_resp.text,
+                    )
+                    raise GrafanaError(
+                        f"Failed to init Alertmanager for org: {ng_resp.text}"
+                    )
+
                 logger.debug(
                     "POST /api/alertmanager/grafana/config/api/v1/alerts org_id=%s payload: %s",
                     org_id,
