@@ -193,9 +193,7 @@ class GrafanaService:
             "settings": {
                 "bottoken": bot_token,
                 "chatid": str(chat_id),
-                "message": '{{ template "default.message" . }}',
             },
-            "disableResolveMessage": False,
         }
         try:
             async with self._client(org_id) as client:
@@ -218,11 +216,10 @@ class GrafanaService:
         """Set the default notification policy to route all alerts to Telegram."""
         policy = {
             "receiver": "Telegram",
-            "group_by": ["alertname", "grafana_folder"],
+            "group_by": ["alertname"],
             "group_wait": "30s",
             "group_interval": "5m",
-            "repeat_interval": "12h",
-            "routes": [],
+            "repeat_interval": "4h",
         }
         try:
             async with self._client(org_id) as client:
