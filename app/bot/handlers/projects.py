@@ -66,10 +66,7 @@ async def cmd_create_project(message: Message, grafana: GrafanaService) -> None:
         org_id = await grafana.create_organization(project_name)
         await grafana.add_datasources(org_id, project_name)
         await grafana.create_folder(org_id, project_name)
-        await grafana.create_telegram_contact_point(
-            org_id, settings.TELEGRAM_BOT_TOKEN, chat_id
-        )
-        await grafana.set_notification_policy(org_id)
+        await grafana.setup_alerting(org_id, settings.TELEGRAM_BOT_TOKEN, chat_id)
 
         await message.answer(
             f"Project <b>{safe_name}</b> created successfully.\n"

@@ -183,52 +183,45 @@ class GrafanaService:
     # Alerting
     # ------------------------------------------------------------------
 
-    async def create_telegram_contact_point(
+    async def setup_alerting(
         self, org_id: int, bot_token: str, chat_id: str
     ) -> None:
-        """Create a Telegram contact point in the org's alert manager."""
+        """Configure Telegram alerting for the org via the Alertmanager config API.
+
+        Uses POST /api/alertmanager/grafana/config/api/v1/alerts which correctly
+        respects X-Grafana-Org-Id, unlike the provisioning API.
+        """
         payload = {
-            "name": "Telegram",
-            "type": "telegram",
-            "settings": {
-                "bottoken": bot_token,
-                "chatid": str(chat_id),
-            },
+            "alertmanager_config": {
+                "receivers": [
+                    {
+                        "name": "Telegram",
+                        "telegram_configs": [
+                            {
+                                "bot_token": bot_token,
+                                "chat_id": int(chat_id),
+                                "parse_mode": "HTML",
+                            }
+                        ],
+                    }
+                ],
+                "route": {
+                    "receiver": "Telegram",
+                    "group_by": ["alertname"],
+                    "group_wait": "30s",
+                    "group_interval": "5m",
+                    "repeat_interval": "4h",
+                },
+            }
         }
         try:
             async with self._client(org_id) as client:
                 resp = await client.post(
-                    "/api/v1/provisioning/contact-points", json=payload
+                    "/api/alertmanager/grafana/config/api/v1/alerts", json=payload
                 )
-                if resp.status_code not in (200, 202):
+                if resp.status_code not in (200, 201, 202):
                     raise GrafanaError(
-                        f"Failed to create Telegram contact point: {resp.text}"
-                    )
-        except GrafanaError:
-            raise
-        except httpx.RequestError:
-            raise GrafanaError(
-                f"Cannot reach Grafana at {self.base_url}. "
-                "Check that the service is running and GRAFANA_URL is correct."
-            )
-
-    async def set_notification_policy(self, org_id: int) -> None:
-        """Set the default notification policy to route all alerts to Telegram."""
-        policy = {
-            "receiver": "Telegram",
-            "group_by": ["alertname"],
-            "group_wait": "30s",
-            "group_interval": "5m",
-            "repeat_interval": "4h",
-        }
-        try:
-            async with self._client(org_id) as client:
-                resp = await client.put(
-                    "/api/v1/provisioning/policies", json=policy
-                )
-                if resp.status_code not in (200, 202):
-                    raise GrafanaError(
-                        f"Failed to set notification policy: {resp.text}"
+                        f"Failed to configure alerting: {resp.text}"
                     )
         except GrafanaError:
             raise
