@@ -1,6 +1,9 @@
+import logging
 from typing import Any
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 
 class GrafanaError(Exception):
@@ -193,26 +196,46 @@ class GrafanaService:
         Returns (service_account_id, token). The token is scoped to the org
         so provisioning API calls made with it need no X-Grafana-Org-Id header.
         """
+        logger.debug("Creating temp service account for org_id=%s", org_id)
         async with self._client(org_id) as client:
-            sa_resp = await client.post(
-                "/api/serviceaccounts",
-                json={"name": "grafana-bot-setup", "role": "Admin", "isDisabled": False},
+            sa_payload = {"name": "grafana-bot-setup", "role": "Admin", "isDisabled": False}
+            logger.debug("POST /api/serviceaccounts payload: %s", sa_payload)
+            sa_resp = await client.post("/api/serviceaccounts", json=sa_payload)
+            logger.debug(
+                "POST /api/serviceaccounts -> status=%s body=%s",
+                sa_resp.status_code, sa_resp.text,
             )
             if sa_resp.status_code not in (200, 201):
+                logger.error(
+                    "Failed to create service account: status=%s body=%s",
+                    sa_resp.status_code, sa_resp.text,
+                )
                 raise GrafanaError(
                     f"Failed to create service account: {sa_resp.text}"
                 )
             sa_id: int = sa_resp.json()["id"]
+            logger.debug("Service account created: id=%s", sa_id)
 
+            tok_payload = {"name": "grafana-bot-setup-token"}
+            logger.debug("POST /api/serviceaccounts/%s/tokens payload: %s", sa_id, tok_payload)
             tok_resp = await client.post(
                 f"/api/serviceaccounts/{sa_id}/tokens",
-                json={"name": "grafana-bot-setup-token"},
+                json=tok_payload,
+            )
+            logger.debug(
+                "POST /api/serviceaccounts/%s/tokens -> status=%s body=%s",
+                sa_id, tok_resp.status_code, tok_resp.text,
             )
             if tok_resp.status_code not in (200, 201):
+                logger.error(
+                    "Failed to create service account token: status=%s body=%s",
+                    tok_resp.status_code, tok_resp.text,
+                )
                 raise GrafanaError(
                     f"Failed to create service account token: {tok_resp.text}"
                 )
             token: str = tok_resp.json()["key"]
+            logger.debug("Service account token created successfully")
 
         return sa_id, token
 
@@ -246,33 +269,56 @@ class GrafanaService:
 
         try:
             async with self._token_client(token) as client:
+                cp_payload = {
+                    "name": "Telegram",
+                    "type": "telegram",
+                    "settings": {
+                        "bottoken": bot_token,
+                        "chatid": str(chat_id),
+                    },
+                }
+                logger.debug(
+                    "POST /api/v1/provisioning/contact-points payload: %s",
+                    {**cp_payload, "settings": {**cp_payload["settings"], "bottoken": "***"}},
+                )
                 cp_resp = await client.post(
                     "/api/v1/provisioning/contact-points",
-                    json={
-                        "name": "Telegram",
-                        "type": "telegram",
-                        "settings": {
-                            "bottoken": bot_token,
-                            "chatid": str(chat_id),
-                        },
-                    },
+                    json=cp_payload,
+                )
+                logger.debug(
+                    "POST /api/v1/provisioning/contact-points -> status=%s body=%s",
+                    cp_resp.status_code, cp_resp.text,
                 )
                 if cp_resp.status_code not in (200, 201, 202):
+                    logger.error(
+                        "Failed to create Telegram contact point: status=%s body=%s",
+                        cp_resp.status_code, cp_resp.text,
+                    )
                     raise GrafanaError(
                         f"Failed to create Telegram contact point: {cp_resp.text}"
                     )
 
+                policy_payload = {
+                    "receiver": "Telegram",
+                    "group_by": ["alertname"],
+                    "group_wait": "30s",
+                    "group_interval": "5m",
+                    "repeat_interval": "4h",
+                }
+                logger.debug("PUT /api/v1/provisioning/policies payload: %s", policy_payload)
                 policy_resp = await client.put(
                     "/api/v1/provisioning/policies",
-                    json={
-                        "receiver": "Telegram",
-                        "group_by": ["alertname"],
-                        "group_wait": "30s",
-                        "group_interval": "5m",
-                        "repeat_interval": "4h",
-                    },
+                    json=policy_payload,
+                )
+                logger.debug(
+                    "PUT /api/v1/provisioning/policies -> status=%s body=%s",
+                    policy_resp.status_code, policy_resp.text,
                 )
                 if policy_resp.status_code not in (200, 202):
+                    logger.error(
+                        "Failed to set notification policy: status=%s body=%s",
+                        policy_resp.status_code, policy_resp.text,
+                    )
                     raise GrafanaError(
                         f"Failed to set notification policy: {policy_resp.text}"
                     )

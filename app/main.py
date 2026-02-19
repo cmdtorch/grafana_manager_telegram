@@ -12,7 +12,7 @@ from app.config import settings
 from app.services.grafana import GrafanaService
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
