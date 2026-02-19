@@ -31,16 +31,9 @@ class GrafanaService:
     # ------------------------------------------------------------------
 
     async def create_organization(self, name: str) -> int:
-        """Create a new Grafana organization and return its ID.
-
-        Raises GrafanaError if the org already exists or the request fails.
-        """
+        """Create a new Grafana organization and return its ID."""
         try:
             async with self._client() as client:
-                check = await client.get(f"/api/orgs/name/{name}")
-                if check.status_code == 200:
-                    raise GrafanaError(f"Organization '{name}' already exists.")
-
                 resp = await client.post("/api/orgs", json={"name": name})
                 if resp.status_code not in (200, 201):
                     raise GrafanaError(
@@ -120,7 +113,6 @@ class GrafanaService:
                 "url": "http://prometheus:9090",
                 "access": "proxy",
                 "isDefault": True,
-                "jsonData": {"timeInterval": "15s"},
             },
             {
                 "name": "Loki",
@@ -145,7 +137,6 @@ class GrafanaService:
             async with self._client(org_id) as client:
                 for ds in datasources:
                     resp = await client.post("/api/datasources", json=ds)
-                    # 409 = datasource with this name already exists in the org
                     if resp.status_code not in (200, 201, 409):
                         raise GrafanaError(
                             f"Failed to add datasource '{ds['name']}': {resp.text}"
@@ -164,14 +155,12 @@ class GrafanaService:
 
     async def create_folder(self, org_id: int, project_name: str) -> None:
         """Create a dashboard folder named after the project."""
-        uid = project_name.lower().replace(" ", "-")[:40]
         try:
             async with self._client(org_id) as client:
                 resp = await client.post(
                     "/api/folders",
-                    json={"title": project_name, "uid": uid},
+                    json={"title": project_name},
                 )
-                # 412 = folder with this uid already exists
                 if resp.status_code not in (200, 201, 412):
                     raise GrafanaError(f"Failed to create folder: {resp.text}")
         except GrafanaError:
@@ -189,64 +178,36 @@ class GrafanaService:
     async def setup_alerting(
         self, org_id: int, bot_token: str, chat_id: str
     ) -> None:
-        """Configure Telegram contact point + routing policy for the org.
-
-        Uses admin basic auth with X-Grafana-Org-Id, which is what the
-        provisioning API requires (service-account tokens don't work here).
-        """
+        """Configure Telegram contact point + routing policy for the org."""
         try:
             async with self._client(org_id) as client:
-                cp_payload = {
-                    "name": "Telegram",
-                    "type": "telegram",
-                    "settings": {
-                        "bottoken": bot_token,
-                        "chatid": str(chat_id),
-                    },
-                }
-                logger.debug(
-                    "POST /api/v1/provisioning/contact-points org_id=%s", org_id
-                )
                 cp_resp = await client.post(
                     "/api/v1/provisioning/contact-points",
-                    json=cp_payload,
-                )
-                logger.debug(
-                    "POST /api/v1/provisioning/contact-points -> status=%s body=%s",
-                    cp_resp.status_code, cp_resp.text,
+                    json={
+                        "name": "Telegram",
+                        "type": "telegram",
+                        "settings": {
+                            "bottoken": bot_token,
+                            "chatid": str(chat_id),
+                        },
+                    },
                 )
                 if cp_resp.status_code not in (200, 201, 202):
-                    logger.error(
-                        "Failed to create contact point: status=%s body=%s",
-                        cp_resp.status_code, cp_resp.text,
-                    )
                     raise GrafanaError(
                         f"Failed to create Telegram contact point: {cp_resp.text}"
                     )
 
-                policy_payload = {
-                    "receiver": "Telegram",
-                    "group_by": ["alertname"],
-                    "group_wait": "30s",
-                    "group_interval": "5m",
-                    "repeat_interval": "4h",
-                }
-                logger.debug(
-                    "PUT /api/v1/provisioning/policies org_id=%s", org_id
-                )
                 policy_resp = await client.put(
                     "/api/v1/provisioning/policies",
-                    json=policy_payload,
-                )
-                logger.debug(
-                    "PUT /api/v1/provisioning/policies -> status=%s body=%s",
-                    policy_resp.status_code, policy_resp.text,
+                    json={
+                        "receiver": "Telegram",
+                        "group_by": ["alertname"],
+                        "group_wait": "30s",
+                        "group_interval": "5m",
+                        "repeat_interval": "4h",
+                    },
                 )
                 if policy_resp.status_code not in (200, 202):
-                    logger.error(
-                        "Failed to set notification policy: status=%s body=%s",
-                        policy_resp.status_code, policy_resp.text,
-                    )
                     raise GrafanaError(
                         f"Failed to set notification policy: {policy_resp.text}"
                     )
