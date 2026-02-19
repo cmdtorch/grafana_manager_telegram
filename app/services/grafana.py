@@ -183,45 +183,98 @@ class GrafanaService:
     # Alerting
     # ------------------------------------------------------------------
 
+    # ------------------------------------------------------------------
+    # Alerting
+    # ------------------------------------------------------------------
+
+    async def _create_temp_token(self, org_id: int) -> tuple[int, str]:
+        """Create a temporary Admin service account + token in org_id.
+
+        Returns (service_account_id, token). The token is scoped to the org
+        so provisioning API calls made with it need no X-Grafana-Org-Id header.
+        """
+        async with self._client(org_id) as client:
+            sa_resp = await client.post(
+                "/api/serviceaccounts",
+                json={"name": "grafana-bot-setup", "role": "Admin", "isDisabled": False},
+            )
+            if sa_resp.status_code not in (200, 201):
+                raise GrafanaError(
+                    f"Failed to create service account: {sa_resp.text}"
+                )
+            sa_id: int = sa_resp.json()["id"]
+
+            tok_resp = await client.post(
+                f"/api/serviceaccounts/{sa_id}/tokens",
+                json={"name": "grafana-bot-setup-token"},
+            )
+            if tok_resp.status_code not in (200, 201):
+                raise GrafanaError(
+                    f"Failed to create service account token: {tok_resp.text}"
+                )
+            token: str = tok_resp.json()["key"]
+
+        return sa_id, token
+
+    async def _delete_service_account(self, org_id: int, sa_id: int) -> None:
+        async with self._client(org_id) as client:
+            await client.delete(f"/api/serviceaccounts/{sa_id}")
+
+    def _token_client(self, token: str) -> httpx.AsyncClient:
+        return httpx.AsyncClient(
+            base_url=self.base_url,
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=10.0,
+        )
+
     async def setup_alerting(
         self, org_id: int, bot_token: str, chat_id: str
     ) -> None:
-        """Configure Telegram alerting for the org via the Alertmanager config API.
+        """Configure Telegram contact point + routing policy for the org.
 
-        Uses POST /api/alertmanager/grafana/config/api/v1/alerts which correctly
-        respects X-Grafana-Org-Id, unlike the provisioning API.
+        Creates a temporary service account token scoped to the org so that
+        the provisioning API calls carry the correct org context without
+        relying on X-Grafana-Org-Id (which the provisioning API ignores).
         """
-        payload = {
-            "alertmanager_config": {
-                "receivers": [
-                    {
-                        "name": "Telegram",
-                        "telegram_configs": [
-                            {
-                                "bot_token": bot_token,
-                                "chat_id": int(chat_id),
-                                "parse_mode": "HTML",
-                            }
-                        ],
-                    }
-                ],
-                "route": {
-                    "receiver": "Telegram",
-                    "group_by": ["alertname"],
-                    "group_wait": "30s",
-                    "group_interval": "5m",
-                    "repeat_interval": "4h",
-                },
-            }
-        }
         try:
-            async with self._client(org_id) as client:
-                resp = await client.post(
-                    "/api/alertmanager/grafana/config/api/v1/alerts", json=payload
+            sa_id, token = await self._create_temp_token(org_id)
+        except httpx.RequestError:
+            raise GrafanaError(
+                f"Cannot reach Grafana at {self.base_url}. "
+                "Check that the service is running and GRAFANA_URL is correct."
+            )
+
+        try:
+            async with self._token_client(token) as client:
+                cp_resp = await client.post(
+                    "/api/v1/provisioning/contact-points",
+                    json={
+                        "name": "Telegram",
+                        "type": "telegram",
+                        "settings": {
+                            "bottoken": bot_token,
+                            "chatid": str(chat_id),
+                        },
+                    },
                 )
-                if resp.status_code not in (200, 201, 202):
+                if cp_resp.status_code not in (200, 201, 202):
                     raise GrafanaError(
-                        f"Failed to configure alerting: {resp.text}"
+                        f"Failed to create Telegram contact point: {cp_resp.text}"
+                    )
+
+                policy_resp = await client.put(
+                    "/api/v1/provisioning/policies",
+                    json={
+                        "receiver": "Telegram",
+                        "group_by": ["alertname"],
+                        "group_wait": "30s",
+                        "group_interval": "5m",
+                        "repeat_interval": "4h",
+                    },
+                )
+                if policy_resp.status_code not in (200, 202):
+                    raise GrafanaError(
+                        f"Failed to set notification policy: {policy_resp.text}"
                     )
         except GrafanaError:
             raise
@@ -230,3 +283,5 @@ class GrafanaService:
                 f"Cannot reach Grafana at {self.base_url}. "
                 "Check that the service is running and GRAFANA_URL is correct."
             )
+        finally:
+            await self._delete_service_account(org_id, sa_id)
