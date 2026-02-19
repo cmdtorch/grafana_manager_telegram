@@ -269,58 +269,51 @@ class GrafanaService:
 
         try:
             async with self._token_client(token) as client:
-                cp_payload = {
-                    "name": "Telegram",
-                    "type": "telegram",
-                    "settings": {
-                        "bottoken": bot_token,
-                        "chatid": str(chat_id),
-                    },
+                am_payload = {
+                    "alertmanager_config": {
+                        "route": {
+                            "receiver": "Telegram",
+                            "group_by": ["alertname"],
+                            "group_wait": "30s",
+                            "group_interval": "5m",
+                            "repeat_interval": "4h",
+                        },
+                        "receivers": [
+                            {
+                                "name": "Telegram",
+                                "grafana_managed_receiver_configs": [
+                                    {
+                                        "name": "Telegram",
+                                        "type": "telegram",
+                                        "settings": {
+                                            "bottoken": bot_token,
+                                            "chatid": str(chat_id),
+                                        },
+                                    }
+                                ],
+                            }
+                        ],
+                    }
                 }
                 logger.debug(
-                    "POST /api/v1/provisioning/contact-points payload: %s",
-                    {**cp_payload, "settings": {**cp_payload["settings"], "bottoken": "***"}},
+                    "POST /api/alertmanager/grafana/config/api/v1/alerts payload: %s",
+                    str(am_payload).replace(bot_token, "***"),
                 )
-                cp_resp = await client.post(
-                    "/api/v1/provisioning/contact-points",
-                    json=cp_payload,
-                )
-                logger.debug(
-                    "POST /api/v1/provisioning/contact-points -> status=%s body=%s",
-                    cp_resp.status_code, cp_resp.text,
-                )
-                if cp_resp.status_code not in (200, 201, 202):
-                    logger.error(
-                        "Failed to create Telegram contact point: status=%s body=%s",
-                        cp_resp.status_code, cp_resp.text,
-                    )
-                    raise GrafanaError(
-                        f"Failed to create Telegram contact point: {cp_resp.text}"
-                    )
-
-                policy_payload = {
-                    "receiver": "Telegram",
-                    "group_by": ["alertname"],
-                    "group_wait": "30s",
-                    "group_interval": "5m",
-                    "repeat_interval": "4h",
-                }
-                logger.debug("PUT /api/v1/provisioning/policies payload: %s", policy_payload)
-                policy_resp = await client.put(
-                    "/api/v1/provisioning/policies",
-                    json=policy_payload,
+                am_resp = await client.post(
+                    "/api/alertmanager/grafana/config/api/v1/alerts",
+                    json=am_payload,
                 )
                 logger.debug(
-                    "PUT /api/v1/provisioning/policies -> status=%s body=%s",
-                    policy_resp.status_code, policy_resp.text,
+                    "POST /api/alertmanager/grafana/config/api/v1/alerts -> status=%s body=%s",
+                    am_resp.status_code, am_resp.text,
                 )
-                if policy_resp.status_code not in (200, 202):
+                if am_resp.status_code not in (200, 201, 202):
                     logger.error(
-                        "Failed to set notification policy: status=%s body=%s",
-                        policy_resp.status_code, policy_resp.text,
+                        "Failed to configure Alertmanager: status=%s body=%s",
+                        am_resp.status_code, am_resp.text,
                     )
                     raise GrafanaError(
-                        f"Failed to set notification policy: {policy_resp.text}"
+                        f"Failed to configure Alertmanager: {am_resp.text}"
                     )
         except GrafanaError:
             raise
