@@ -253,50 +253,43 @@ class GrafanaService:
     async def setup_alerting(
         self, org_id: int, bot_token: str, chat_id: str
     ) -> None:
-        """Configure Telegram contact point + routing policy for the org.
+        """Configure Telegram alerting for the org via Alertmanager config API.
 
-        Creates a temporary service account token scoped to the org so that
-        the provisioning API calls carry the correct org context without
-        relying on X-Grafana-Org-Id (which the provisioning API ignores).
+        Uses admin basic auth with X-Grafana-Org-Id — the super-admin can reach
+        the Grafana-managed Alertmanager for any org, which service-account tokens
+        cannot do for freshly created orgs.
         """
-        try:
-            sa_id, token = await self._create_temp_token(org_id)
-        except httpx.RequestError:
-            raise GrafanaError(
-                f"Cannot reach Grafana at {self.base_url}. "
-                "Check that the service is running and GRAFANA_URL is correct."
-            )
-
-        try:
-            async with self._token_client(token) as client:
-                am_payload = {
-                    "alertmanager_config": {
-                        "route": {
-                            "receiver": "Telegram",
-                            "group_by": ["alertname"],
-                            "group_wait": "30s",
-                            "group_interval": "5m",
-                            "repeat_interval": "4h",
-                        },
-                        "receivers": [
+        am_payload = {
+            "alertmanager_config": {
+                "route": {
+                    "receiver": "Telegram",
+                    "group_by": ["alertname"],
+                    "group_wait": "30s",
+                    "group_interval": "5m",
+                    "repeat_interval": "4h",
+                },
+                "receivers": [
+                    {
+                        "name": "Telegram",
+                        "grafana_managed_receiver_configs": [
                             {
                                 "name": "Telegram",
-                                "grafana_managed_receiver_configs": [
-                                    {
-                                        "name": "Telegram",
-                                        "type": "telegram",
-                                        "settings": {
-                                            "bottoken": bot_token,
-                                            "chatid": str(chat_id),
-                                        },
-                                    }
-                                ],
+                                "type": "telegram",
+                                "settings": {
+                                    "bottoken": bot_token,
+                                    "chatid": str(chat_id),
+                                },
                             }
                         ],
                     }
-                }
+                ],
+            }
+        }
+        try:
+            async with self._client(org_id) as client:
                 logger.debug(
-                    "POST /api/alertmanager/grafana/config/api/v1/alerts payload: %s",
+                    "POST /api/alertmanager/grafana/config/api/v1/alerts org_id=%s payload: %s",
+                    org_id,
                     str(am_payload).replace(bot_token, "***"),
                 )
                 am_resp = await client.post(
@@ -322,5 +315,3 @@ class GrafanaService:
                 f"Cannot reach Grafana at {self.base_url}. "
                 "Check that the service is running and GRAFANA_URL is correct."
             )
-        finally:
-            await self._delete_service_account(org_id, sa_id)
